@@ -28,5 +28,5 @@ module.exports = {
     optimization: {
         minimize: true,
     },
-    devtool: 'source-map',
+    devtool: false,
 };

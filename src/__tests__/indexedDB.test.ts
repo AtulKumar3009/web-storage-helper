@@ -1,22 +1,31 @@
 import "core-js/stable/structured-clone";
 import "fake-indexeddb/auto";
 import IndexedDB from '../utils/indexedDB';
+import { adapterContract } from './adapterContract'
 
-describe('IndexedDB storage test', () => {
-    test('Should save value in IndexedDB storage', async () => {
-        const saved = await IndexedDB.set('key', 'value')
-        expect(saved).toBe(true)
+adapterContract('IndexedDB', IndexedDB)
+
+describe('IndexedDB storage specifics', () => {
+    afterEach(() => {
+        jest.restoreAllMocks()
     })
 
-    test('Should read value from IndexedDB storage', async () => {
-        const saved = await IndexedDB.get('key')
-        expect(saved).toBe('value')
+    test('Should report false when clearing fails', async () => {
+        jest.spyOn(IndexedDB as any, 'db').mockRejectedValueOnce(new Error('open failed'))
+        expect(await IndexedDB.clear('key')).toBe(false)
     })
 
-    test('Should clear value from IndexedDB storage', async () => {
-        const cleared = await IndexedDB.clear('key')
-        expect(cleared).toBeTruthy()
-        const saved = await IndexedDB.get('key')
-        expect(saved).toBeNull()
+    test('Should reject instead of hanging when reading fails', async () => {
+        jest.spyOn(IndexedDB as any, 'db').mockRejectedValueOnce(new Error('open failed'))
+        await expect(IndexedDB.get('key')).rejects.toThrow('open failed')
+    })
+
+    test('Should recover after a failed call', async () => {
+        jest.spyOn(IndexedDB as any, 'db').mockRejectedValueOnce(new Error('open failed'))
+        await expect(IndexedDB.get('key')).rejects.toThrow()
+        jest.restoreAllMocks()
+        expect(await IndexedDB.set('key', 'value')).toBe(true)
+        expect(await IndexedDB.get('key')).toBe('value')
+        await IndexedDB.clear()
     })
 })

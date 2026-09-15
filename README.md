@@ -1,43 +1,61 @@
-# Web Storage Helper
+# web-storage-helper
 
-`web-storage-helper` is a TypeScript-based library that simplifies working with different types of storage in the browser (like `localStorage`, `sessionStorage`, `cookies`, `indexedDB`, and `temp` storage). It supports data encryption and ensures safe handling of sensitive information.
+[![npm version](https://img.shields.io/npm/v/web-storage-helper.svg)](https://www.npmjs.com/package/web-storage-helper)
+[![npm downloads](https://img.shields.io/npm/dm/web-storage-helper.svg)](https://www.npmjs.com/package/web-storage-helper)
+[![license](https://img.shields.io/npm/l/web-storage-helper.svg)](https://github.com/AtulKumar3009/web-storage-helper/blob/master/LICENSE)
+[![TypeScript](https://img.shields.io/badge/TypeScript-ready-blue.svg)](https://www.typescriptlang.org/)
+
+**Web Storage Helper** is a small TypeScript library that gives you one API for every kind of browser storage: `localStorage`, `sessionStorage`, cookies, IndexedDB, and an in-memory temp store. Values are serialised for you, and both keys and values can be encrypted with a single configured secret, so sensitive data such as auth tokens and user preferences is not stored in plain text.
+
+- npm: <https://www.npmjs.com/package/web-storage-helper>
+- Source and issues: <https://github.com/AtulKumar3009/web-storage-helper>
 
 ## Features
 
 - **Multiple Storage Types**: Supports `localStorage`, `sessionStorage`, `cookies`, `indexedDB`, and `temp` storage.
-- **Encryption**: Secure data encryption for both keys and values.
-- **Singleton Pattern**: Ensures only one instance of the storage class.
-- **Unified API**: Consistent API for managing all types of storage.
-- **TypeScript Support**: Strong typing with auto-completion in editors.
+- **Encryption**: Optional encryption of values, and of keys, using one globally configured secret.
+- **Unified API**: The same `set`, `get`, and `clear` methods for every storage type.
+- **Safe to import anywhere**: Importing the library never touches the browser. Storage is accessed lazily, so it can be imported in server-rendered code and degrades to `false` / `null` where a storage area is unavailable.
+- **TypeScript Support**: Strong typing with auto-completion in editors, including a typed `get<T>()`.
 
 ## Installation
 
-You can easily install `web-storage-helper` via **Yarn**:
+```bash
+npm install web-storage-helper
+```
 
 ```bash
 yarn add web-storage-helper
 ```
 
+```bash
+pnpm add web-storage-helper
+```
+
+The package ships its own TypeScript declarations, so no separate `@types` package is needed.
+
 ## Project Setup
 
-To get started, you need to configure the library and set up your encryption key if you plan to use encryption for data storage and retrieval.
+If you plan to use encryption, configure the secret once before the first encrypted call. Only the first call to `configureStorage` takes effect; later calls are ignored.
 
 ```ts
-import {configureStorage} from 'web-storage-helper';
+import { configureStorage } from 'web-storage-helper';
 
 // Configure encryption key globally
 configureStorage({ encryptionKey: 'your-secret-key', encodeKey: true });
 ```
 
+Any call that passes `encryption = true` before a key has been configured throws `Error('Encryption configuration is missing.')`.
+
 ### Importing Storage Methods
 
-The storage API is exposed via the `storage` object, which contains methods for `localStorage`, `sessionStorage`, `cookies`, `indexedDB`, and `temp` storage. Additionally, the `configure` method is now available directly from the `storage` object.
+The storage API is exposed via the default `storage` export, which has one entry per storage type: `storage.local`, `storage.session`, `storage.cookie`, `storage.indexedDB`, and `storage.temp`.
 
 ```ts
 import storage from 'web-storage-helper';
 ```
 
-You can then use the `set`, `get`, and `clear` methods provided for each storage type.
+Each entry provides `set`, `get`, `getAll`, and `clear`. The `local`, `session`, `cookie`, and `temp` methods are synchronous; the `indexedDB` methods return promises.
 
 ---
 
@@ -88,7 +106,34 @@ const authToken = storage.cookie.get('authToken', true);
 
 // Get data from indexedDB
 const userData = await storage.indexedDB.get('userData', false);
+
+// Type the result instead of receiving `any`
+const preference = storage.local.get<'light' | 'dark'>('theme'); // 'light' | 'dark' | null
 ```
+
+A missing key returns `null`.
+
+### Retrieving Everything (`getAll`)
+
+To read every entry of a storage type at once, use `getAll`. It returns an object of key → value and applies the same rules as `get` to each entry: with `encryption = true`, encoded keys are decoded and values are decrypted with the configured secret.
+
+```ts
+// Every entry in localStorage, as stored
+const everything = storage.local.getAll();
+// { theme: 'dark', 'VsOIw4bDlsKlw6LCqsODw5Fk': 'U2FsdGVkX1…' }  ← encrypted entries stay raw
+
+// Every entry, with encrypted keys and values decoded
+const decrypted = storage.local.getAll(true);
+// { theme: 'dark', username: 'Atul' }
+
+// Type the values
+const prefs = storage.session.getAll<string>();
+
+// IndexedDB is asynchronous
+const records = await storage.indexedDB.getAll(true);
+```
+
+An empty storage returns `{}`. Entries that were not written with encryption pass through unchanged when `encryption = true`, just as `get(key, true)` would return them.
 
 ### Clearing Data (`clear`)
 
@@ -108,58 +153,75 @@ const cleared = storage.cookie.clear('authToken', true);
 console.log(cleared); //true | false
 
 // Clear all data from indexedDB
-const cleared= await storage.indexedDB.clear();
+const cleared = await storage.indexedDB.clear();
+console.log(cleared); //true | false
+
+// Clear every cookie set for the current path
+const cleared = storage.cookie.clear();
 console.log(cleared); //true | false
 ```
+
+To clear an entry that was written with `encryption = true` while `encodeKey` is enabled, pass `true` as the second argument so the same encoded key is removed.
 
 ---
 
 ## API Reference
 
-### `configureStorage({ encryptionKey:string, encodeKey: boolean })`
+### `configureStorage({ encryptionKey?: string, encodeKey?: boolean })`
 
-Configures the encryption key for the library. If encryption is enabled, this key will be used to encrypt and decrypt data.
+Configures encryption for the library. Only the first call takes effect.
 
-- **config**: The configuration object containing `encryptionKey` (string).
+- **encryptionKey**: The secret used to encrypt and decrypt values (and keys when `encodeKey` is `true`).
+- **encodeKey**: If `true`, keys of encrypted entries are stored in an encoded form as well.
 
 ### `set(key: string, value: any, encryption = false)`
 
-Stores data in a specified storage type.
+Stores data in a specified storage type. Returns `true` on success and `false` when the storage area is unavailable or rejects the write (for example when the quota is exceeded). For `indexedDB` the result is a `Promise<boolean>`.
 
 - **key**: The key under which the data will be stored (string).
-- **value**: The data to be stored (any type).
-- **encryption**: If `true`, encrypts the key and value before storing.
+- **value**: The data to be stored (any JSON-serialisable value).
+- **encryption**: If `true`, encrypts the value, and the key when `encodeKey` is enabled, before storing.
 
-### `get(key: string, encryption = false)`
+### `get<T = any>(key: string, encryption = false)`
 
-Retrieves data from the specified storage type.
+Retrieves data from the specified storage type. Returns `T | null`, or `Promise<T | null>` for `indexedDB`. A missing key, or an unavailable storage area, yields `null`.
 
 - **key**: The key under which the data is stored (string).
-- **encryption**: If `true`, decrypts the value before returning it.
+- **encryption**: If `true`, decrypts the value before returning it. Must match the flag used in `set`.
+
+### `getAll<T = any>(encryption = false)`
+
+Retrieves every entry of the specified storage type as `Record<string, T>`, or `Promise<Record<string, T>>` for `indexedDB`. An empty or unavailable storage area yields `{}`.
+
+- **encryption**: If `true`, decodes each key (when `encodeKey` is enabled) and decrypts each value before returning them. Requires a configured key.
 
 ### `clear(key?: string, encryption = false)`
 
-Clears data from the specified storage type.
+Clears data from the specified storage type. Returns `true` on success and `false` when the storage area is unavailable. For `indexedDB` the result is a `Promise<boolean>`.
 
 - **key**: Optional. If provided, only the specific key will be removed. Otherwise, clears all data from the storage type.
-- **encryption**: If `true`, encrypts the key before clearing.
+- **encryption**: If `true`, encodes the key before clearing. Must match the flag used in `set`.
 
 ---
 
 ## Example: Full Usage Example
 
 ```ts
-import storage from 'web-storage-helper';
+import storage, { configureStorage } from 'web-storage-helper';
 
 // Configure encryption key globally
-storage.configure({ encryptionKey: 'secret-key', encodeKey: true });
+configureStorage({ encryptionKey: 'secret-key', encodeKey: true });
 
 // Set encrypted data in localStorage
 storage.local.set('username', 'Atul', true);
 
 // Get encrypted data from localStorage
-const username = storage.local.get('username', true);
+const username = storage.local.get<string>('username', true);
 console.log(username); // 'Atul'
+
+// Read every encrypted entry in localStorage, decoded
+const everything = storage.local.getAll<string>(true);
+console.log(everything); // { username: 'Atul' }
 
 // Clear encrypted data from localStorage
 storage.local.clear('username', true);
@@ -167,13 +229,36 @@ storage.local.clear('username', true);
 // Set data in indexedDB
 const saved = await storage.indexedDB.set('username', 'Atul');
 
-// Get data from localStorage
-const username = await storage.indexedDB.get('username');
-console.log(username); // 'Atul'
+// Get data from indexedDB
+const stored = await storage.indexedDB.get<string>('username');
+console.log(stored); // 'Atul'
 
-// Clear data from localStorage
-const cleared = await storage.local.clear('username');
+// Clear data from indexedDB
+const cleared = await storage.indexedDB.clear('username');
 ```
+
+---
+
+## Upgrading from 2.x
+
+Version 3 changed how encrypted entries are stored: values are serialised once instead of twice, and encoded keys no longer carry JSON quotes. Plain (unencrypted) entries are unaffected. Entries written with `encryption = true` by 2.x are still readable, but they appear differently:
+
+- With `encodeKey: true`, `get('username', true)` returns `null` because the stored key differs. `getAll(true)` lists them under a JSON-quoted key such as `'"username"'`.
+- Their values come back as a JSON string, for example `'"Atul"'` or `'{"age":30}'`, rather than the parsed value.
+
+Run this once per storage type after upgrading to rewrite them in the new format:
+
+```ts
+const legacy = storage.local.getAll<string>(true);
+Object.keys(legacy)
+    .filter(key => key.startsWith('"'))
+    .forEach(key => {
+        storage.local.set(JSON.parse(key), JSON.parse(legacy[key]), true);
+        storage.local.clear(key, true);
+    });
+```
+
+If you used `encodeKey: false`, keys are unchanged; only the values need `JSON.parse` once.
 
 ---
 

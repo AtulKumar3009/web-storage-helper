@@ -1,20 +1,24 @@
-class Cookie {
-    private static instance: Cookie;
+import { Entries, StorageAdapter } from '../types';
 
-    static getInstance(): Cookie {
-        if (!this.instance) {
-            this.instance = new Cookie();
-        }
-        return this.instance;
-    }
+const EXPIRED = 'expires=Thu, 01 Jan 1970 00:00:00 UTC';
+
+/** Parses `document.cookie` into name → raw (still URI-encoded) value. */
+const parseCookies = (): Entries =>
+    document.cookie.split(';').reduce<Entries>((entries, cookie) => {
+        const [name, ...rest] = cookie.trim().split('=');
+        if (name) entries[name] = rest.join('=');
+        return entries;
+    }, {});
+
+class Cookie implements StorageAdapter {
     private isStorageAvailable(): boolean {
         try {
             // Try setting a test cookie
-            document.cookie = "test_cookie=test; path=/";
-            const isAvailable = document.cookie.includes("test_cookie=test");
+            document.cookie = 'test_cookie=test; path=/';
+            const isAvailable = document.cookie.includes('test_cookie=test');
 
             // Clean up the test cookie
-            document.cookie = "test_cookie=; path=/; expires=Thu, 01 Jan 1970 00:00:00 UTC";
+            document.cookie = `test_cookie=; path=/; ${EXPIRED}`;
 
             return isAvailable;
         } catch (error) {
@@ -23,36 +27,35 @@ class Cookie {
     }
 
     set(key: string, value: string) {
-        value = encodeURIComponent(value)
-        if (this.isStorageAvailable()) {
-            let cookie = `${key}=${value}; path=/`;
-            document.cookie = cookie;
-            return true
-        }
-        return false
+        if (!this.isStorageAvailable()) return false;
+        document.cookie = `${key}=${encodeURIComponent(value)}; path=/`;
+        return true;
     }
 
     get(key: string) {
-        let value: string | null = null
-        if (this.isStorageAvailable()) {
-            const cookieValue = document.cookie.split(';').find(c => c.trim().startsWith(key + '='));
-            if (!cookieValue) return null;
-            value = cookieValue.split('=')[1]
-        }
+        if (!this.isStorageAvailable()) return null;
+        const value = parseCookies()[key];
         return value ? decodeURIComponent(value) : null;
     }
 
+    getAll() {
+        const entries: Entries = {};
+        if (!this.isStorageAvailable()) return entries;
+        const raw = parseCookies();
+        Object.keys(raw).forEach(name => {
+            entries[name] = decodeURIComponent(raw[name]);
+        });
+        return entries;
+    }
+
     clear(key?: string) {
-        if (this.isStorageAvailable()) {
-            if (key) {
-                document.cookie = `${key}=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;`;
-            } else {
-                document.cookie = '';
-            }
-            return true
-        }
-        return false
+        if (!this.isStorageAvailable()) return false;
+        const names = key ? [key] : Object.keys(parseCookies());
+        names.forEach(name => {
+            document.cookie = `${name}=; ${EXPIRED}; path=/;`;
+        });
+        return true;
     }
 }
 
-export default Cookie.getInstance()
+export default new Cookie();
