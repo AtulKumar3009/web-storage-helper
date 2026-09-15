@@ -1,110 +1,113 @@
-import { decrypt, encrypt } from './encryption';
-import { StorageConfig, StorageType } from './types';
+import { decrypt, encrypt, isEncrypted } from './encryption';
+import { Entries, StorageAdapter, StorageConfig, StorageType } from './types';
 import Cookie from './utils/cookie';
 import IndexedDB from './utils/indexedDB';
 import Local from './utils/local';
 import Session from './utils/session';
 import Temp from './utils/temp';
 
+const adapters: Record<StorageType, StorageAdapter> = {
+    [StorageType.LOCAL]: Local,
+    [StorageType.SESSION]: Session,
+    [StorageType.COOKIE]: Cookie,
+    [StorageType.INDEXED_DB]: IndexedDB,
+    [StorageType.TEMP]: Temp,
+};
+
+/**
+ * The single facade over every adapter. Owns JSON serialisation, encryption, and key
+ * encoding; adapters only ever see raw strings.
+ */
 class Storage {
-    private static instance: Storage;
-    private config: StorageConfig = {}
+    private config: StorageConfig = {};
 
-    private constructor() { }
-
-    static getInstance(): Storage {
-        if (!Storage.instance) {
-            Storage.instance = new Storage();
-        }
-        return Storage.instance;
-    }
-
+    /** The first configuration wins; later calls are ignored. */
     configure(config: StorageConfig) {
         if (Object.keys(this.config).length === 0) {
             this.config = config;
         }
     }
 
-    private validateEncryption() {
-        if (!this.config.encryptionKey) {
+    private requireKey(): string {
+        const key = this.config.encryptionKey;
+        if (!key) {
             throw new Error('Encryption configuration is missing.');
         }
+        return key;
     }
 
-    private getStorage(type: StorageType) {
-        switch (type) {
-            case StorageType.LOCAL:
-                return Local;
-            case StorageType.SESSION:
-                return Session;
-            case StorageType.COOKIE:
-                return Cookie;
-            case StorageType.INDEXED_DB:
-                return IndexedDB;
-            case StorageType.TEMP:
-                return Temp;
+    /** The key an entry is stored under. Validates the configuration whenever encryption is requested. */
+    private storageKey(key: string, encryption: boolean): string {
+        if (!encryption) return key;
+        const secret = this.requireKey();
+        return this.config.encodeKey ? encrypt(key, secret, false) : key;
+    }
+
+    /**
+     * Inverse of `storageKey`: the key the caller originally passed to `set`.
+     * A key that was not encoded (a plain entry) is returned as is.
+     */
+    private originalKey(storageKey: string, encryption: boolean): string {
+        if (!encryption || !this.config.encodeKey) return storageKey;
+        return decrypt(storageKey, this.requireKey(), false) ?? storageKey;
+    }
+
+    private fromJson(text: string, fallback: any): any {
+        try {
+            return JSON.parse(text);
+        } catch (error) {
+            return fallback;
         }
     }
 
+    /**
+     * Turns a stored string back into a value. With encryption on, a plain entry is
+     * passed through as stored, mirroring `originalKey`; an encrypted entry that does
+     * not decrypt to JSON was written with another key and yields `null`.
+     */
+    private parse(data: string | null, encryption: boolean): any {
+        if (!data) return null;
+        if (encryption && isEncrypted(data)) {
+            const text = decrypt(data, this.requireKey());
+            return text === null ? null : this.fromJson(text, null);
+        }
+        return this.fromJson(data, data);
+    }
 
+    /** Applies the same key and value transformation as `get` to every stored entry. */
+    private parseAll(entries: Entries, encryption: boolean): Entries<any> {
+        if (encryption) this.requireKey();
+        const result: Entries<any> = {};
+        Object.keys(entries).forEach(storageKey => {
+            result[this.originalKey(storageKey, encryption)] = this.parse(entries[storageKey], encryption);
+        });
+        return result;
+    }
 
     set(type: StorageType, key: string, value: any, encryption: boolean) {
-        const storage = this.getStorage(type);
-        if (!storage) return false
-        let data = JSON.stringify(value);
-
-        if (encryption) {
-            this.validateEncryption();
-            data = encrypt(data, this.config.encryptionKey!);
-
-            if (this.config.encodeKey) {
-                key = encrypt(key, this.config.encryptionKey!, false);
-            }
-        }
-
-        return storage.set(key, data)
+        const storageKey = this.storageKey(key, encryption);
+        const json = JSON.stringify(value);
+        const data = encryption ? encrypt(json, this.requireKey()) : json;
+        return adapters[type].set(storageKey, data);
     }
 
-    get(type: StorageType, key: string, encryption: boolean) {
-        const storage = this.getStorage(type);
-        if (!storage) return null;
+    get(type: StorageType, key: string, encryption: boolean): any {
+        const data = adapters[type].get(this.storageKey(key, encryption));
+        return data instanceof Promise
+            ? data.then(resolved => this.parse(resolved, encryption))
+            : this.parse(data, encryption);
+    }
 
-        if (encryption && this.config.encodeKey) {
-            key = encrypt(key, this.config.encryptionKey!, false);
-        }
-
-        const getValue = (data: string | null) => {
-            if (data && encryption) {
-                this.validateEncryption();
-                data = decrypt(data, this.config.encryptionKey!);
-            }
-
-            try {
-                return data ? JSON.parse(data) : null;
-            } catch (error) {
-                return data
-            }
-        }
-
-        const data = storage.get(key)
-        if (data instanceof Promise) {
-            return new Promise(resolve =>
-                data.then(data => resolve(getValue(data)))
-            )
-        }
-        return getValue(data)
-
+    getAll(type: StorageType, encryption: boolean): any {
+        const entries = adapters[type].getAll();
+        return entries instanceof Promise
+            ? entries.then(resolved => this.parseAll(resolved, encryption))
+            : this.parseAll(entries, encryption);
     }
 
     clear(type: StorageType, encryption: boolean, key?: string) {
-        const storage = this.getStorage(type);
-        if (!storage) return false;
-        if (key && encryption && this.config.encodeKey) {
-            key = encrypt(key, this.config.encryptionKey!, false);
-        }
-        return storage.clear(key);
-
+        return adapters[type].clear(key === undefined ? undefined : this.storageKey(key, encryption));
     }
 }
 
-export default Storage.getInstance();
+export default new Storage();

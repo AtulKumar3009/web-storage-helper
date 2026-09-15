@@ -1,20 +1,31 @@
 import Cookie from '../utils/cookie'
+import { adapterContract } from './adapterContract'
 
-describe('Cookie storage test', () => {
-    test('Should save value in Cookie storage', () => {
-        const saved = Cookie.set('key', 'value')
-        expect(saved).toBe(true)
+adapterContract('Cookie', Cookie)
+
+describe('Cookie storage specifics', () => {
+    afterEach(() => {
+        Cookie.clear()
     })
 
-    test('Should read value from Cookie storage', () => {
-        const saved = Cookie.get('key')
-        expect(saved).toBe('value')
+    test('Should URI-encode values so separators survive', () => {
+        Cookie.set('first', 'a=b; c=d')
+        Cookie.set('second', '2')
+        expect(document.cookie).toContain('first=a%3Db%3B%20c%3Dd')
+        expect(Cookie.get('first')).toBe('a=b; c=d')
+        expect(Cookie.get('second')).toBe('2')
     })
 
-    test('Should clear value from Cookie storage', () => {
-        const cleared = Cookie.clear('key')
-        expect(cleared).toBeTruthy()
-        const saved = Cookie.get('key')
-        expect(saved).toBeNull()
+    test('Should not match a key that is only a prefix of another', () => {
+        Cookie.set('keyName', 'long')
+        expect(Cookie.get('key')).toBeNull()
+        expect(Cookie.get('keyName')).toBe('long')
+    })
+
+    test('Should leave document.cookie empty after clearing everything', () => {
+        Cookie.set('first', '1')
+        Cookie.set('second', '2')
+        expect(Cookie.clear()).toBe(true)
+        expect(document.cookie).toBe('')
     })
 })
